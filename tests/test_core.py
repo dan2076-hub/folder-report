@@ -76,3 +76,17 @@ class ScanTests(unittest.TestCase):
                 scan = scan_directory(root, ())
                 self.assertTrue(scan.invalid_root)
                 self.assertFalse(build_report(scan, 10)['complete'])
+
+    def test_excludes_match_basename_and_relative_path(self):
+        self.write('a.tmp', b'x')
+        self.write('nested/b.tmp', b'x')
+        self.write('cache/inside.txt', b'x')
+        self.write('nested/keep.txt', b'x')
+        report = self.report(exclude=('*.tmp', 'cache/*'))
+        self.assertEqual(report['files'], 1)
+        self.assertEqual(report['largest'][0]['path'], 'nested/keep.txt')
+        self.assertEqual(report['skipped']['excluded'], 3)
+
+    def test_default_excludes_only_apply_to_directories(self):
+        self.write('venv', b'x')
+        self.assertEqual(self.report()['files'], 1)

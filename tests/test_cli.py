@@ -30,3 +30,13 @@ class CliTests(unittest.TestCase):
                 result = self.command(*args)
                 self.assertEqual(result.returncode, 2)
                 self.assertNotIn('Traceback', result.stdout + result.stderr)
+
+    def test_duplicates_and_exclusion_flags(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / 'a.txt').write_bytes(b'hello')
+            (root / 'b.txt').write_bytes(b'hello')
+            (root / 'ignored.tmp').write_bytes(b'hello')
+            result = self.command(root, '--duplicates', '--exclude', '*.tmp')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('Duplicate logical bytes: 5', result.stdout)

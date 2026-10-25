@@ -1,5 +1,6 @@
 """Read-only traversal and deterministic logical-size summaries."""
 from dataclasses import dataclass, field
+from fnmatch import fnmatchcase
 import os
 from pathlib import Path
 import stat
@@ -82,6 +83,9 @@ def scan_directory(root: Path, exclude: tuple[str, ...]) -> ScanResult:
                 continue
             if is_link_or_reparse(metadata):
                 result.skipped['links'] += 1
+                continue
+            if any(fnmatchcase(entry.name, pattern) or fnmatchcase(rel, pattern) for pattern in exclude):
+                result.skipped['excluded'] += 1
                 continue
             if stat.S_ISDIR(metadata.st_mode):
                 if entry.name in DEFAULT_EXCLUDES:
