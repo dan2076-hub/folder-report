@@ -106,3 +106,46 @@ class DuplicateTests(unittest.TestCase):
         self.assertEqual(scan.skipped['hardlinks'], 1)
         self.assertEqual(sum(group['duplicate_bytes'] for group in groups), 5)
         self.assertEqual(issues, [])
+
+    def test_unreadable_content_is_an_issue(self):
+        self.write('a', b'hello')
+        self.write('b', b'hello')
+        with patch('folder_report.duplicates.os.open', side_effect=PermissionError('synthetic denial')):
+            groups, issues = find_duplicates(self.records())
+        self.assertEqual(groups, [])
+        self.assertEqual(issues, [{'path': 'a', 'kind': 'permission_denied'}, {'path': 'b', 'kind': 'permission_denied'}])
+
+    def test_changed_representative_does_not_hide_other_duplicates(self):
+        from folder_report import duplicates
+        first = self.write('a', b'hello')
+        self.write('b', b'hello')
+        self.write('c', b'hello')
+        records = self.records()
+        original = duplicates.same_bytes
+        changed = False
+        def replace_representative(left, right):
+            nonlocal changed
+            if not changed:
+                changed = True
+                first.write_bytes(b'world')
+                os.utime(first, ns=(records[0].mtime_ns, records[0].mtime_ns + 1000000))
+            return original(left, right)
+        with patch('folder_report.duplicates.same_bytes', side_effect=replace_representative):
+            groups, issues = find_duplicates(records)
+        self.assertEqual(groups, [{'bytes_each': 5, 'paths': ['b', 'c'], 'duplicate_bytes': 5}])
+        self.assertEqual(issues, [{'path': 'a', 'kind': 'changed'}])
+
+    def test_final_path_check_rejects_changes_after_comparison(self):
+        from folder_report import duplicates
+        first = self.write('a', b'hello')
+        self.write('b', b'hello')
+        records = self.records()
+        original = duplicates.same_bytes
+        def change_after_compare(left, right):
+            equal = original(left, right)
+            os.utime(first, ns=(records[0].mtime_ns, records[0].mtime_ns + 1000000))
+            return equal
+        with patch('folder_report.duplicates.same_bytes', side_effect=change_after_compare):
+            groups, issues = find_duplicates(records)
+        self.assertEqual(groups, [])
+        self.assertEqual(issues, [{'path': 'a', 'kind': 'changed'}])

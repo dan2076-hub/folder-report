@@ -1,5 +1,6 @@
 """CLI formatting and exit codes."""
 import argparse
+import json
 from pathlib import Path
 import sys
 
@@ -37,12 +38,13 @@ def format_text(report: dict) -> str:
 def main(argv: list[str] | None = None) -> int:
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, 'reconfigure'):
-            stream.reconfigure(encoding='utf-8')
+            stream.reconfigure(encoding='utf-8', errors='backslashreplace')
     parser = argparse.ArgumentParser(description='Read-only directory size report using logical bytes.')
     parser.add_argument('root', type=Path, help='Directory to inspect')
     parser.add_argument('--top', type=nonnegative, default=10, help='Largest file rows, 0 to hide (default: 10)')
     parser.add_argument('--duplicates', action='store_true', help='Verify byte-identical duplicate files')
     parser.add_argument('--exclude', action='append', default=[], metavar='PATTERN', help='Additional fnmatch pattern (repeatable)')
+    parser.add_argument('--json', action='store_true', help='Print one machine-readable JSON report')
     args = parser.parse_args(argv)
     scan = scan_directory(args.root, tuple(args.exclude))
     report = build_report(scan, args.top, duplicates_checked=args.duplicates)
@@ -53,5 +55,5 @@ def main(argv: list[str] | None = None) -> int:
         report['issues'].extend(issues)
         report['issues'].sort(key=lambda issue: (issue['path'], issue['kind']))
         report['complete'] = not report['issues']
-    print(format_text(report))
+    print(json.dumps(report, ensure_ascii=False) if args.json else format_text(report))
     return 2 if scan.invalid_root else (0 if report['complete'] else 1)

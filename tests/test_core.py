@@ -1,7 +1,11 @@
 from pathlib import Path
+from contextlib import contextmanager
 import os
+import stat
 import tempfile
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 from folder_report.core import build_report, scan_directory
 
@@ -90,3 +94,68 @@ class ScanTests(unittest.TestCase):
     def test_default_excludes_only_apply_to_directories(self):
         self.write('venv', b'x')
         self.assertEqual(self.report()['files'], 1)
+
+    def test_permission_error_is_partial_and_preserves_other_files(self):
+        self.write('private/file', b'x')
+        self.write('visible', b'hello')
+        original = os.scandir
+        def restricted(path):
+            if Path(path).name == 'private':
+                raise PermissionError('synthetic denial')
+            return original(path)
+        with patch('folder_report.core.os.scandir', side_effect=restricted):
+            report = self.report()
+        self.assertFalse(report['complete'])
+        self.assertEqual(report['files'], 1)
+        self.assertEqual(report['issues'], [{'path': 'private', 'kind': 'permission_denied'}])
+
+    def test_enumeration_order_does_not_change_report(self):
+        for name in ['z/a.txt', 'a.txt', 'b.TXT', 'another/deep/c']:
+            self.write(name, b'hello')
+        expected = self.report()
+        original = os.scandir
+        @contextmanager
+        def reversed_scandir(path):
+            with original(path) as iterator:
+                entries = list(iterator)
+            yield iter(reversed(entries))
+        with patch('folder_report.core.os.scandir', side_effect=reversed_scandir):
+            self.assertEqual(self.report(), expected)
+
+    def test_reparse_directory_metadata_prevents_recursion(self):
+        self.write('junction/never-read.txt', b'outside')
+        original = Path.lstat
+        flag = getattr(stat, 'FILE_ATTRIBUTE_REPARSE_POINT', 0x400)
+        def reparse(path):
+            if path == self.root / 'junction':
+                return SimpleNamespace(st_mode=stat.S_IFDIR, st_file_attributes=flag)
+            return original(path)
+        with patch.object(stat, 'FILE_ATTRIBUTE_REPARSE_POINT', flag, create=True), \
+                patch('pathlib.Path.lstat', reparse):
+            report = self.report()
+        self.assertEqual(report['files'], 0)
+        self.assertEqual(report['skipped']['links'], 1)
+        self.assertTrue(report['complete'])
+
+    def test_real_symlinks_and_cycles_are_skipped(self):
+        self.write('actual.txt', b'hello')
+        try:
+            os.symlink(self.root, self.root / 'cycle', target_is_directory=True)
+            os.symlink(self.root / 'actual.txt', self.root / 'alias.txt')
+        except OSError as error:
+            self.skipTest('Symlink creation unavailable: ' + type(error).__name__)
+        report = self.report()
+        self.assertEqual(report['files'], 1)
+        self.assertEqual(report['skipped']['links'], 2)
+
+    def test_missing_file_metadata_becomes_an_issue(self):
+        self.write('vanished', b'hello')
+        original = Path.lstat
+        def disappeared(path):
+            if path.name == 'vanished':
+                raise FileNotFoundError('synthetic disappearance')
+            return original(path)
+        with patch('pathlib.Path.lstat', disappeared):
+            report = self.report()
+        self.assertFalse(report['complete'])
+        self.assertEqual(report['issues'], [{'path': 'vanished', 'kind': 'unreadable'}])
